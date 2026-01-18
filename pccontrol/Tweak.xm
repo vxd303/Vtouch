@@ -40,6 +40,7 @@
 #include "Play.h"
 #include "TouchIndicator/TouchIndicatorWindow.h"
 #include "Activator/ActivatorListener.h"
+#include "H264Stream.h"
 
 
 #define DEBUG_MODE
@@ -364,6 +365,7 @@ Boolean init()
         //system("sudo zxtouchb -e \"chown -R mobile:mobile /var/mobile/Documents/com.zjx.zxtouchsp\"");
         //system("sudo zxtouchb -e \"chown -R mobile:mobile /var/mobile/Library/ZXTouch\"");
 
+        startH264StreamServer();
         socketServer();
     });
 }

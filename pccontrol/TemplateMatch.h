@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 #undef NO
 #undef YES
-#import <opencv2/opencv.hpp>
+#import <opencv.hpp>
 #endif
 
 
@@ -20,7 +20,7 @@
 
 #import <UIKit/UIKit.h>
 #import <CoreMedia/CoreMedia.h>
-#import <opencv2/imgcodecs/ios.h>
+#import <imgcodecs/ios.h>
 
 @interface TemplateMatch : NSObject
 

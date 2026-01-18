@@ -152,6 +152,16 @@ device = zxtouch("127.0.0.1") # create instance
 
 [Image Matching](#image-matching)
 
+[Screenshot](#screenshot)
+
+[Hardware Key Events](#hardware-key-events)
+
+[App Management](#app-management)
+
+[Scheduling](#scheduling)
+
+[Runtime Utilities](#runtime-utilities)
+
 [Toast](#toast)
 
 [Color Picker (RGB Value From A Point on Screen)](#color-picker-rgb-value-from-a-point-on-screen)
@@ -249,6 +259,142 @@ device.touch_with_list([{"type": TOUCH_UP, "finger_index": 1, "x": 300, "y": 300
 
 device.disconnect()
 ```
+
+## Screenshot:
+
+Capture a screenshot and optionally crop to a region.
+
+```python
+def screenshot(filePath, region=None):
+	"""Capture a screenshot.
+
+	Args:
+		filePath: output path on the device.
+		region: optional tuple (x, y, width, height) in pixels.
+	"""
+```
+
+Save and clear screenshots in the ZXTouch album.
+
+```python
+def save_to_system_album(filePath):
+	"""Save the image at filePath to the ZXTouch Photos album."""
+
+def clear_system_album():
+	"""Delete all images stored in the ZXTouch Photos album."""
+```
+
+## Hardware Key Events
+
+Send hardware key down/up events.
+
+```python
+def key_down(key_type):
+	"""Press a hardware key."""
+
+def key_up(key_type):
+	"""Release a hardware key."""
+```
+
+Key type constants:
+
+```python
+from zxtouch.hardwarekeytypes import (
+	HARDWARE_KEY_HOME,
+	HARDWARE_KEY_VOLUME_UP,
+	HARDWARE_KEY_VOLUME_DOWN,
+	HARDWARE_KEY_LOCK,
+)
+```
+
+## App Management
+
+Terminate an app, query state/info, and check the frontmost app.
+
+```python
+def app_kill(bundle_identifier):
+	"""Terminate an application by bundle identifier."""
+
+def app_state(bundle_identifier):
+	"""Get application state by bundle identifier."""
+
+def app_info(bundle_identifier):
+	"""Get application info by bundle identifier."""
+
+def front_most_app_id():
+	"""Get the frontmost application bundle identifier."""
+
+def front_most_orientation():
+	"""Get the frontmost application orientation."""
+```
+
+Return value notes:
+
+* All app management calls return `(success, value_or_error)`.
+* `app_state` returns:
+	* `0`: app not running / not found.
+	* `1`: app running (fallback for older APIs).
+	* any other integer: `SBApplication` processState value when available.
+
+## Scheduling
+
+Manage auto-launch entries, timers, and idle state.
+
+```python
+def set_auto_launch(name, script, enabled):
+	"""Set or update auto-launch entry."""
+
+def list_auto_launch():
+	"""Return a list of entries with name/script/enabled."""
+
+def set_timer(name, interval, repeat, script):
+	"""Schedule a script by timer."""
+
+def remove_timer(name):
+	"""Remove a timer by name."""
+
+def keep_awake(enabled):
+	"""Enable/disable idle timer."""
+
+def stop():
+	"""Stop currently running script safely."""
+```
+
+Return value notes:
+
+* All scheduling calls return `(success, value_or_error)`.
+* `list_auto_launch` returns a list of dictionaries with `name`, `script`, `enabled`.
+
+## Runtime Utilities
+
+Dialog, path helpers, and stored dialog values.
+
+```python
+def dialog(options):
+	"""Show a dialog.
+
+	Args:
+		options: dict with keys title, message, ok, cancel.
+	Returns:
+		Result tuple: (success?, error_message/response_index)
+	"""
+
+def clear_dialog_values():
+	"""Clear stored dialog values."""
+
+def root_dir():
+	"""Get root directory path."""
+
+def current_dir():
+	"""Get current directory path."""
+
+def bot_path():
+	"""Get scripts folder path."""
+```
+
+Return value notes:
+
+* All runtime utility calls return `(success, value_or_error)`.
 
 ## Bring Application to Foreground
 

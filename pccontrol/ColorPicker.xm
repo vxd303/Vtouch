@@ -1,7 +1,7 @@
 #include "ColorPicker.h"
 #include "Screen.h"
 #include "Image.h"
-#import <opencv2/imgcodecs/ios.h>
+#import <imgcodecs/ios.h>
 #import <mach/mach.h>
 
 

@@ -16,9 +16,6 @@
 #import "TableViewCellWithSlider.h"
 #import "TableViewCellWithEntry.h"
 
-#import "GCDWebServer.h"
-#import "GCDWebServerDataResponse.h"
-
 #import "libactivator.h"
 #import <dlfcn.h>
 #import <objc/runtime.h>
@@ -28,11 +25,7 @@
 #define SETTING_CELL_SWITCH 0
 #define SETTING_CELL_ENTRY 1
 
-
 @interface SettingsPageViewController ()
-{
-    GCDWebServer* _webServer;
-}
 @end
 
 @implementation SettingsPageViewController
@@ -143,12 +136,11 @@
 - (void)handleWebServerWithSwitchCellInstance:(UISwitch*)s {
     if ([s isOn])
     {
-        [Util showAlertBoxWithOneOption:self title:@"ZXTouch" message:NSLocalizedString(@"commonSoon", nil) buttonString:@"OK"];
+        [Util showAlertBoxWithOneOption:self
+                                  title:@"ZXTouch"
+                                message:@"H.264 stream is available on port 7001 (raw Annex B). Use an H.264-capable client to connect."
+                           buttonString:@"OK"];
         [s setOn:NO];
-    }
-    else
-    {
-        NSLog(@"Stop WebServer");
     }
 }
 

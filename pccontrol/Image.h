@@ -6,7 +6,7 @@
 #ifdef __cplusplus
 #undef NO
 #undef YES
-#import <opencv2/opencv.hpp>
+#import <opencv.hpp>
 #endif
 
 using namespace cv;
