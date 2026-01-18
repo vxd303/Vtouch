@@ -19,8 +19,8 @@ static const int kH264KeyframeIntervalSeconds = 2;
 static const int kPCRIntervalFrames = 10;
 
 // TS PIDs
-static const uint16_t kTSPatPid  = 0x0000;
-static const uint16_t kTSPmtPid  = 0x0100;
+static const uint16_t kTSPatPid = 0x0000;
+static const uint16_t kTSPmtPid = 0x0100;
 static const uint16_t kTSVideoPid = 0x0101;
 static const uint16_t kTSProgramNumber = 1;
 
@@ -187,7 +187,7 @@ static bool writeTSPackets(int fd,
                 ad[3] = (base >> 17) & 0xFF;
                 ad[4] = (base >> 9) & 0xFF;
                 ad[5] = (base >> 1) & 0xFF;
-                ad[6] = ((base & 1) << 7) | 0x7E;
+                ad[6] = (uint8_t)(((base & 1) << 7) | 0x7E);
                 ad[7] = 0x00;
                 ai = 8;
             }
@@ -219,7 +219,7 @@ static void H264OutputCallback(void *ref,
     (void)ref; (void)flags;
     if (!src) return;
 
-    ZXTH264EncoderContext *ctx = CFBridgingRelease(src);
+    ZXTH264EncoderContext *ctx = (ZXTH264EncoderContext *)CFBridgingRelease(src);
     if (st != noErr || !sb || !CMSampleBufferDataIsReady(sb)) {
         dispatch_semaphore_signal(ctx.semaphore);
         return;
@@ -228,7 +228,8 @@ static void H264OutputCallback(void *ref,
     BOOL key = NO;
     CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
     if (atts && CFArrayGetCount(atts)) {
-        CFDictionaryRef a = CFArrayGetValueAtIndex(atts, 0);
+        // Sửa lỗi: ép kiểu CFDictionaryRef
+        CFDictionaryRef a = (CFDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
         key = !CFDictionaryContainsKey(a, kCMSampleAttachmentKey_NotSync);
     }
     ctx.isKeyframe = key;
@@ -299,7 +300,8 @@ static void streamLoop(int fd) {
         ZXTH264EncoderContext *ctx=[[ZXTH264EncoderContext alloc]init];
         ctx.encodedData=[NSMutableData data];
         ctx.semaphore=dispatch_semaphore_create(0);
-        void *ref=CFBridgingRetain(ctx);
+        // Sửa lỗi: ép kiểu void * cho CFBridgingRetain
+        void *ref=(void *)CFBridgingRetain(ctx);
 
         CVPixelBufferRef pb=NULL;
         CVPixelBufferCreate(kCFAllocatorDefault,
@@ -327,8 +329,9 @@ static void streamLoop(int fd) {
 
         NSData *pat=buildPAT(patCC++);
         NSData *pmt=buildPMT(pmtCC++);
-        if (!sendAll(fd,pat.bytes,188)) break;
-        if (!sendAll(fd,pmt.bytes,188)) break;
+        // Sửa lỗi: ép kiểu (const uint8_t *)
+        if (!sendAll(fd,(const uint8_t *)pat.bytes,188)) break;
+        if (!sendAll(fd,(const uint8_t *)pmt.bytes,188)) break;
 
         uint64_t pts=(uint64_t)(frame*90000/kH264TargetFPS);
         uint8_t pes[19]={
@@ -343,8 +346,9 @@ static void streamLoop(int fd) {
         NSMutableData *payload=[NSMutableData dataWithBytes:pes length:14];
         [payload appendData:ctx.encodedData];
 
+        // Sửa lỗi: ép kiểu (const uint8_t *) cho payload.bytes
         if (!writeTSPackets(fd,kTSVideoPid,
-            payload.bytes,payload.length,true,
+            (const uint8_t *)payload.bytes,payload.length,true,
             (frame%kPCRIntervalFrames)==0,
             pts,&vidCC)) break;
 
