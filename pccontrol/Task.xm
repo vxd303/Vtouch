@@ -54,25 +54,31 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_PROCESS_BRING_FOREGROUND) //bring to foreground
     {
-        @autoreleasepool{   
-            switchProcessForegroundFromRawData(eventData);
-            notifyClient((UInt8*)"0\r\n", writeStreamRef); 
-        }
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool{   
+                switchProcessForegroundFromRawData((UInt8*)[dataStr UTF8String]);
+                notifyClient((UInt8*)"0\r\n", writeStreamRef); 
+            }
+        });
     }
     else if (taskType == TASK_SHOW_ALERT_BOX)
     {
-        @autoreleasepool{   
-            NSError *err = nil;
-            showAlertBoxFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool{   
+                NSError *err = nil;
+                showAlertBoxFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)"0\r\n", writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_USLEEP)
     {
@@ -205,18 +211,21 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_SHOW_TOAST)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            showToastFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                showToastFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)"0\r\n", writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_COLOR_PICKER)
     {
@@ -266,18 +275,21 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_TOUCH_INDICATOR)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            handleTouchIndicatorTaskWithRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                handleTouchIndicatorTaskWithRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)"0\r\n", writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_TEXT_RECOGNIZER)
     {
@@ -326,62 +338,75 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_APP_KILL)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            killAppFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                killAppFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)"0\r\n", writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_APP_STATE)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            NSString *state = appStateFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                NSString *state = appStateFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", state] UTF8String], writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", state] UTF8String], writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_APP_INFO)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            NSString *info = appInfoFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                NSString *info = appInfoFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", info] UTF8String], writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", info] UTF8String], writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_FRONTMOST_APP_ID)
     {
-        @autoreleasepool {
-            NSString *frontApp = frontMostAppId();
-            notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", frontApp] UTF8String], writeStreamRef);
-        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSString *frontApp = frontMostAppId();
+                notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", frontApp] UTF8String], writeStreamRef);
+            }
+        });
     }
     else if (taskType == TASK_FRONTMOST_APP_ORIENTATION)
     {
-        @autoreleasepool {
-            NSString *orientation = frontMostAppOrientation();
-            notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", orientation] UTF8String], writeStreamRef);
-        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSString *orientation = frontMostAppOrientation();
+                notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", orientation] UTF8String], writeStreamRef);
+            }
+        });
     }
     else if (taskType == TASK_SET_AUTO_LAUNCH)
     {
@@ -475,33 +500,38 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_DIALOG)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            NSString *response = dialogFromRawData(eventData, &err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        NSString *dataStr = [NSString stringWithUTF8String:(char*)eventData];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                NSString *response = dialogFromRawData((UInt8*)[dataStr UTF8String], &err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", response ?: @""] UTF8String], writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", response ?: @""] UTF8String], writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_CLEAR_DIALOG)
     {
-        @autoreleasepool {
-            NSError *err = nil;
-            clearDialogValues(&err);
-            if (err)
-            {
-                notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
+                NSError *err = nil;
+                clearDialogValues(&err);
+                if (err)
+                {
+                    notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
+                }
+                else
+                {
+                    notifyClient((UInt8*)"0\r\n", writeStreamRef);
+                }
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
-        }
+        });
     }
     else if (taskType == TASK_ROOT_DIR)
     {
