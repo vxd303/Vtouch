@@ -66,7 +66,7 @@ static ActivatorListener *activatorInstance;
 int daemonSock = -1;
 
 
-typedef struct　eventInfo_s* eventInfo;
+typedef struct eventInfo_s* eventInfo;
 typedef struct Node* llNodePtr;
 typedef struct eventData_s* eventDataPtr;
 

@@ -5,7 +5,13 @@
 #import <UIKit/UIKit.h>
 
 #ifdef __cplusplus
+#ifdef NO
+#undef NO
 #import <opencv2/opencv.hpp>
+#define NO __objc_no
+#else
+#import <opencv2/opencv.hpp>
+#endif
 #endif
 
 @interface Screen :NSObject
