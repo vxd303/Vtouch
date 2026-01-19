@@ -6,11 +6,10 @@
 #include <string.h>
 #include <signal.h>
 #include "NSTask.h"
-#include "../pccontrol/SocketServer.h"
 
-// Re-declare since we are in a different project structure but reusing code
-// ideally we should fix the makefile to include the source files
-// For now, I will modify the Makefile to include SocketServer.xm and Task.xm
+// Task 1.1: Daemon Skeleton
+// This daemon currently just stays alive.
+// In Task 1.2, we will move the SocketServer logic here.
 
 #define PORT 6000
 
@@ -20,26 +19,17 @@ BOOL isRunning = YES;
 void handle_signal(int signal) {
     NSLog(@"com.zjx.zxtouchd: Received signal %d, stopping...", signal);
     isRunning = NO;
+    CFRunLoopStop(CFRunLoopGetMain());
 }
 
 int main(int argc, char *argv[], char *envp[]) {
     @autoreleasepool {
-        NSLog(@"com.zjx.zxtouchd: Daemon started.");
+        NSLog(@"com.zjx.zxtouchd: Daemon started. Waiting for instructions...");
 
         signal(SIGTERM, handle_signal);
         signal(SIGINT, handle_signal);
 
-        // Start the Socket Server
-        // We will call the existing socketServer function from pccontrol/SocketServer.xm
-        // But first we need to make sure that file is compiled into this binary.
-        // For now, let's just print a message.
-
-        NSLog(@"com.zjx.zxtouchd: Starting socket server on port %d...", PORT);
-
-        // In the future: socketServer();
-        // Since socketServer() blocks, we are good.
-
-        // Prevent exit
+        // Prevent exit and keep the runloop alive
         NSRunLoop *runLoop = [NSRunLoop currentRunLoop];
         while (isRunning && [runLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate distantFuture]]);
 
