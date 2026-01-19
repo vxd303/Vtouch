@@ -8,8 +8,9 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#define PORT 6000
-#define ADDR "0.0.0.0"
+// Internal IPC Port for SpringBoard Tweak
+#define PORT 6001
+#define ADDR "127.0.0.1"
 
 void socketServer();
 static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, void * clientCallBackInfo);

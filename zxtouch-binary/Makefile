@@ -10,7 +10,7 @@ zxtouchb_FRAMEWORKS = CoreFoundation UIKit CoreGraphics
 zxtouchb_CFLAGS = -fobjc-arc -Wno-error -Wno-module-import-in-extern-c -O2 -s -DNDEBUG
 
 zxtouchd_ARCH = arm64e arm64
-zxtouchd_FILES = main_daemon.mm
+zxtouchd_FILES = main_daemon.mm DaemonSocketServer.mm DaemonTask.mm
 zxtouchd_FRAMEWORKS = CoreFoundation UIKit CoreGraphics
 zxtouchd_CFLAGS = -fobjc-arc -Wno-error -Wno-module-import-in-extern-c -O2 -s -DNDEBUG
 zxtouchd_CODESIGN_FLAGS = -Szxtouchd.entitlements
