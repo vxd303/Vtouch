@@ -31,6 +31,9 @@
 - (CGRect)templateMatchWithPath:(NSString*)imgPath templatePath:(NSString*)templatePath error:(NSError**)err;
 - (CGRect)templateMatchWithUIImage:(UIImage*)img template:(UIImage*)templ;
 - (CGRect)templateMatchWithCGImage:(CGImageRef)img templatePath:(NSString*)templatePath error:(NSError**)err;
+#ifdef __cplusplus
+- (CGRect)templateMatchWithMat:(cv::Mat)img templatePath:(NSString*)templatePath error:(NSError**)err;
+#endif
 
 - (void)setScaleRation:(float)sr;
 - (void)setAcceptableValue:(float)av;
