@@ -216,6 +216,10 @@ static bool writeTSPackets(int fd,
                 ai = 8;
             }
 
+            size_t payloadRoom = payloadMax - ai;
+            if (copy > payloadRoom) {
+                copy = payloadRoom;
+            }
             size_t adaptLen = ai - 1;
             size_t stuff = payloadMax - (ai + copy);
             adaptLen += stuff;
