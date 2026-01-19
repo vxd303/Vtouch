@@ -83,6 +83,32 @@ using namespace std;
     return [self matchWithMat:greyMat andTemplate:templ];
 }
 
+- (CGRect)templateMatchWithMat:(cv::Mat)img templatePath:(NSString*)templatePath error:(NSError**)err {
+    Mat templ = imread([templatePath UTF8String], IMREAD_GRAYSCALE);
+    if (templ.cols == 0 && templ.rows == 0)
+    {
+        *err = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"-1;;Read failed! Check permission or file existance. The height and width of the template image is 0! Template path: %@\r\n", templatePath]}];
+        return CGRect();    
+    }
+    cv::Mat greyMat;
+    // IOSurface usually gives BGRA, ensure conversion is correct. 
+    // OpenCV's imread usually gives BGR.
+    // If input is from IOSurface (BGRA), converting to Gray is standard.
+    // COLOR_BGRA2GRAY or COLOR_RGBA2GRAY. 
+    // Usually IOSurface is BGRA on iOS (kCVPixelFormatType_32BGRA).
+    // Let's assume input mat is BGRA (4 channels).
+    
+    if (img.channels() == 4) {
+        cv::cvtColor(img, greyMat, COLOR_BGRA2GRAY);
+    } else if (img.channels() == 3) {
+        cv::cvtColor(img, greyMat, COLOR_BGR2GRAY);
+    } else {
+        greyMat = img;
+    }
+
+    return [self matchWithMat:greyMat andTemplate:templ];
+}
+
 - (CGRect)templateMatchWithPath:(NSString*)imgPath templatePath:(NSString*)templatePath error:(NSError**)err {
     Mat image = imread([imgPath UTF8String], IMREAD_GRAYSCALE); //[imgPath UTF8String]
     Mat templ = imread([templatePath UTF8String], IMREAD_GRAYSCALE); //[templatePath UTF8String]
@@ -114,6 +140,8 @@ using namespace std;
     double maxVal;
     cv::Point minLoc;
     cv::Point maxLoc;
+    
+    _scaledTempls.clear();
 
     _scaledTempls.push_back(templ);
 
