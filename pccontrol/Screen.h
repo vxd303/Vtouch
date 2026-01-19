@@ -4,6 +4,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+#ifdef __cplusplus
+#import <opencv2/opencv.hpp>
+#endif
+
 @interface Screen :NSObject
 {
     
@@ -27,6 +31,10 @@
 + (NSString*)screenShotToPath:(NSString*)filePath region:(CGRect)region error:(NSError**)error;
 + (void)saveToSystemAlbum:(NSString*)filePath error:(NSError**)error;
 + (void)clearSystemAlbum:(NSError**)error;
+
+#ifdef __cplusplus
++ (cv::Mat)createScreenShotCvMat;
+#endif
 
 @end
 
