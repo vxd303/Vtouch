@@ -101,10 +101,12 @@ int notifyClient(UInt8* msg, CFWriteStreamRef client)
     size_t len = strlen((char*)msg);
     NSData *data = [NSData dataWithBytes:msg length:len];
 
+    CFRetain(client);
     dispatch_async(socketWriteQueue, ^{
         if (CFWriteStreamGetStatus(client) == kCFStreamStatusOpen || CFWriteStreamGetStatus(client) == kCFStreamStatusWriting) {
             CFWriteStreamWrite(client, (const UInt8*)[data bytes], [data length]);
         }
+        CFRelease(client);
     });
     return 0;
 }
