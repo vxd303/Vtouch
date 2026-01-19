@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "vxd303-patch-1"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["main", "vxd303-patch-1"]
 
 jobs:
   build:

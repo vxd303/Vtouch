@@ -8,6 +8,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <errno.h>
+#include <stdatomic.h>
 
 static const int kH264StreamPort = 7001;
 static const int kH264TargetWidth = 1280;
@@ -15,10 +17,15 @@ static const int kH264TargetHeight = 720;
 static const int kH264TargetFPS = 20;
 static const int kH264KeyframeIntervalSeconds = 2;
 static const int kPCRIntervalFrames = 10;
-static const uint16_t kTSVideoPid = 0x0100;
+
+// TS PIDs
 static const uint16_t kTSPatPid = 0x0000;
-static const uint16_t kTSPmtPid = 0x1000;
+static const uint16_t kTSPmtPid = 0x0100;
+static const uint16_t kTSVideoPid = 0x0101;
 static const uint16_t kTSProgramNumber = 1;
+
+// only one viewer
+static _Atomic int gActiveClientFd = -1;
 
 @interface ZXTH264EncoderContext : NSObject
 @property(nonatomic, strong) NSMutableData *encodedData;
@@ -29,417 +36,364 @@ static const uint16_t kTSProgramNumber = 1;
 @implementation ZXTH264EncoderContext
 @end
 
+#pragma mark - Utils
+
 static void appendAnnexBHeader(NSMutableData *data) {
     static const uint8_t header[] = {0x00, 0x00, 0x00, 0x01};
-    [data appendBytes:header length:sizeof(header)];
+    [data appendBytes:header length:4];
 }
 
-static void H264OutputCallback(void *outputCallbackRefCon,
-                               void *sourceFrameRefCon,
-                               OSStatus status,
-                               VTEncodeInfoFlags infoFlags,
-                               CMSampleBufferRef sampleBuffer) {
-    (void)outputCallbackRefCon;
-    (void)infoFlags;
-    if (!sourceFrameRefCon) {
-        return;
-    }
-    ZXTH264EncoderContext *context = CFBridgingRelease(sourceFrameRefCon);
-    if (status != noErr || !sampleBuffer || !CMSampleBufferDataIsReady(sampleBuffer)) {
-        dispatch_semaphore_signal(context.semaphore);
-        return;
-    }
-
-    BOOL isKeyframe = NO;
-    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
-    if (attachments && CFArrayGetCount(attachments) > 0) {
-        CFDictionaryRef attachment = (CFDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
-        BOOL notSync = CFDictionaryContainsKey(attachment, kCMSampleAttachmentKey_NotSync);
-        isKeyframe = !notSync;
-    }
-    context.isKeyframe = isKeyframe;
-
-    CMFormatDescriptionRef formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer);
-    if (isKeyframe && formatDesc) {
-        const uint8_t *sps = NULL;
-        const uint8_t *pps = NULL;
-        size_t spsSize = 0;
-        size_t ppsSize = 0;
-        size_t spsCount = 0;
-        size_t ppsCount = 0;
-        if (CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, 0, &sps, &spsSize, &spsCount, NULL) == noErr &&
-            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, 1, &pps, &ppsSize, &ppsCount, NULL) == noErr) {
-            appendAnnexBHeader(context.encodedData);
-            [context.encodedData appendBytes:sps length:spsSize];
-            appendAnnexBHeader(context.encodedData);
-            [context.encodedData appendBytes:pps length:ppsSize];
-        }
-    }
-
-    CMBlockBufferRef dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
-    size_t length = 0;
-    char *dataPointer = NULL;
-    if (CMBlockBufferGetDataPointer(dataBuffer, 0, NULL, &length, &dataPointer) == noErr) {
-        size_t offset = 0;
-        const size_t headerLength = 4;
-        while (offset + headerLength < length) {
-            uint32_t nalLength = 0;
-            memcpy(&nalLength, dataPointer + offset, headerLength);
-            nalLength = CFSwapInt32BigToHost(nalLength);
-            appendAnnexBHeader(context.encodedData);
-            [context.encodedData appendBytes:(dataPointer + offset + headerLength) length:nalLength];
-            offset += headerLength + nalLength;
-        }
-    }
-
-    dispatch_semaphore_signal(context.semaphore);
-}
-
-static bool sendAll(int socketFd, const uint8_t *buffer, size_t length) {
+static bool sendAll(int fd, const uint8_t *buf, size_t len) {
     size_t sent = 0;
-    while (sent < length) {
-        ssize_t result = send(socketFd, buffer + sent, length - sent, MSG_NOSIGNAL);
-        if (result <= 0) {
+    while (sent < len) {
+        ssize_t r = send(fd, buf + sent, len - sent, 0);
+        if (r > 0) {
+            sent += (size_t)r;
+        } else if (r < 0 && errno == EINTR) {
+            continue;
+        } else {
             return false;
         }
-        sent += (size_t)result;
     }
     return true;
 }
 
-static uint32_t mpegCrc32(const uint8_t *data, size_t length) {
+static uint32_t mpegCrc32(const uint8_t *data, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
-    for (size_t i = 0; i < length; i++) {
+    for (size_t i = 0; i < len; i++) {
         crc ^= (uint32_t)data[i] << 24;
-        for (int bit = 0; bit < 8; bit++) {
-            if (crc & 0x80000000) {
-                crc = (crc << 1) ^ 0x04C11DB7;
-            } else {
-                crc <<= 1;
-            }
-        }
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80000000) ? (crc << 1) ^ 0x04C11DB7 : (crc << 1);
     }
     return crc;
 }
 
-static NSData *buildPATPacket(uint8_t continuityCounter) {
-    uint8_t section[16] = {0};
-    size_t index = 0;
-    section[index++] = 0x00; // table_id
-    section[index++] = 0xB0; // section_syntax_indicator + reserved + section_length high
-    section[index++] = 0x00; // section_length low (filled later)
-    section[index++] = 0x00; // transport_stream_id high
-    section[index++] = 0x01; // transport_stream_id low
-    section[index++] = 0xC1; // version_number + current_next_indicator
-    section[index++] = 0x00; // section_number
-    section[index++] = 0x00; // last_section_number
-    section[index++] = (kTSProgramNumber >> 8) & 0xFF;
-    section[index++] = kTSProgramNumber & 0xFF;
-    section[index++] = 0xE0 | ((kTSPmtPid >> 8) & 0x1F);
-    section[index++] = kTSPmtPid & 0xFF;
+#pragma mark - PAT / PMT
 
-    size_t sectionLength = (index - 3) + 4;
-    section[1] = 0xB0 | ((sectionLength >> 8) & 0x0F);
-    section[2] = sectionLength & 0xFF;
+static NSData *buildPAT(uint8_t cc) {
+    uint8_t sec[16] = {0};
+    size_t i = 0;
+    sec[i++] = 0x00;
+    sec[i++] = 0xB0;
+    sec[i++] = 0x00;
+    sec[i++] = 0x00;
+    sec[i++] = 0x01;
+    sec[i++] = 0xC1;
+    sec[i++] = 0x00;
+    sec[i++] = 0x00;
+    sec[i++] = (kTSProgramNumber >> 8) & 0xFF;
+    sec[i++] = kTSProgramNumber & 0xFF;
+    sec[i++] = 0xE0 | ((kTSPmtPid >> 8) & 0x1F);
+    sec[i++] = kTSPmtPid & 0xFF;
 
-    uint32_t crc = mpegCrc32(section, index);
-    section[index++] = (crc >> 24) & 0xFF;
-    section[index++] = (crc >> 16) & 0xFF;
-    section[index++] = (crc >> 8) & 0xFF;
-    section[index++] = crc & 0xFF;
+    size_t slen = (i - 3) + 4;
+    sec[1] = 0xB0 | ((slen >> 8) & 0x0F);
+    sec[2] = slen & 0xFF;
 
-    uint8_t packet[188] = {0};
-    packet[0] = 0x47;
-    packet[1] = 0x40 | ((kTSPatPid >> 8) & 0x1F);
-    packet[2] = kTSPatPid & 0xFF;
-    packet[3] = 0x10 | (continuityCounter & 0x0F);
-    packet[4] = 0x00; // pointer_field
-    memcpy(packet + 5, section, index);
-    memset(packet + 5 + index, 0xFF, 188 - 5 - index);
-    return [NSData dataWithBytes:packet length:sizeof(packet)];
+    uint32_t crc = mpegCrc32(sec, i);
+    sec[i++] = crc >> 24;
+    sec[i++] = crc >> 16;
+    sec[i++] = crc >> 8;
+    sec[i++] = crc;
+
+    uint8_t pkt[188] = {0};
+    pkt[0] = 0x47;
+    pkt[1] = 0x40;
+    pkt[2] = 0x00;
+    pkt[3] = 0x10 | (cc & 0x0F);
+    pkt[4] = 0x00;
+    memcpy(pkt + 5, sec, i);
+    memset(pkt + 5 + i, 0xFF, 188 - 5 - i);
+    return [NSData dataWithBytes:pkt length:188];
 }
 
-static NSData *buildPMTPacket(uint8_t continuityCounter) {
-    uint8_t section[32] = {0};
-    size_t index = 0;
-    section[index++] = 0x02; // table_id
-    section[index++] = 0xB0; // section_syntax_indicator + reserved + section_length high
-    section[index++] = 0x00; // section_length low (filled later)
-    section[index++] = (kTSProgramNumber >> 8) & 0xFF;
-    section[index++] = kTSProgramNumber & 0xFF;
-    section[index++] = 0xC1; // version_number + current_next_indicator
-    section[index++] = 0x00; // section_number
-    section[index++] = 0x00; // last_section_number
-    section[index++] = 0xE0 | ((kTSVideoPid >> 8) & 0x1F); // PCR PID
-    section[index++] = kTSVideoPid & 0xFF;
-    section[index++] = 0xF0; // program_info_length high
-    section[index++] = 0x00; // program_info_length low
-    section[index++] = 0x1B; // stream_type H.264
-    section[index++] = 0xE0 | ((kTSVideoPid >> 8) & 0x1F);
-    section[index++] = kTSVideoPid & 0xFF;
-    section[index++] = 0xF0; // ES_info_length high
-    section[index++] = 0x00; // ES_info_length low
+static NSData *buildPMT(uint8_t cc) {
+    uint8_t sec[32] = {0};
+    size_t i = 0;
+    sec[i++] = 0x02;
+    sec[i++] = 0xB0;
+    sec[i++] = 0x00;
+    sec[i++] = (kTSProgramNumber >> 8) & 0xFF;
+    sec[i++] = kTSProgramNumber & 0xFF;
+    sec[i++] = 0xC1;
+    sec[i++] = 0x00;
+    sec[i++] = 0x00;
+    sec[i++] = 0xE0 | ((kTSVideoPid >> 8) & 0x1F);
+    sec[i++] = kTSVideoPid & 0xFF;
+    sec[i++] = 0xF0;
+    sec[i++] = 0x00;
+    sec[i++] = 0x1B;
+    sec[i++] = 0xE0 | ((kTSVideoPid >> 8) & 0x1F);
+    sec[i++] = kTSVideoPid & 0xFF;
+    sec[i++] = 0xF0;
+    sec[i++] = 0x00;
 
-    size_t sectionLength = (index - 3) + 4;
-    section[1] = 0xB0 | ((sectionLength >> 8) & 0x0F);
-    section[2] = sectionLength & 0xFF;
+    size_t slen = (i - 3) + 4;
+    sec[1] = 0xB0 | ((slen >> 8) & 0x0F);
+    sec[2] = slen & 0xFF;
 
-    uint32_t crc = mpegCrc32(section, index);
-    section[index++] = (crc >> 24) & 0xFF;
-    section[index++] = (crc >> 16) & 0xFF;
-    section[index++] = (crc >> 8) & 0xFF;
-    section[index++] = crc & 0xFF;
+    uint32_t crc = mpegCrc32(sec, i);
+    sec[i++] = crc >> 24;
+    sec[i++] = crc >> 16;
+    sec[i++] = crc >> 8;
+    sec[i++] = crc;
 
-    uint8_t packet[188] = {0};
-    packet[0] = 0x47;
-    packet[1] = 0x40 | ((kTSPmtPid >> 8) & 0x1F);
-    packet[2] = kTSPmtPid & 0xFF;
-    packet[3] = 0x10 | (continuityCounter & 0x0F);
-    packet[4] = 0x00; // pointer_field
-    memcpy(packet + 5, section, index);
-    memset(packet + 5 + index, 0xFF, 188 - 5 - index);
-    return [NSData dataWithBytes:packet length:sizeof(packet)];
+    uint8_t pkt[188] = {0};
+    pkt[0] = 0x47;
+    pkt[1] = 0x40 | ((kTSPmtPid >> 8) & 0x1F);
+    pkt[2] = kTSPmtPid & 0xFF;
+    pkt[3] = 0x10 | (cc & 0x0F);
+    pkt[4] = 0x00;
+    memcpy(pkt + 5, sec, i);
+    memset(pkt + 5 + i, 0xFF, 188 - 5 - i);
+    return [NSData dataWithBytes:pkt length:188];
 }
 
-static void writeTSPackets(int socketFd, uint16_t pid, const uint8_t *payload, size_t payloadLength, bool payloadStart, bool addPCR, uint64_t pcrBase, uint8_t *continuityCounter) {
-    size_t offset = 0;
-    while (offset < payloadLength) {
-        uint8_t packet[188] = {0};
-        bool isFirst = payloadStart && (offset == 0);
-        bool includePCR = addPCR && isFirst;
-        size_t adaptationLength = 0;
-        packet[0] = 0x47;
-        packet[1] = ((isFirst ? 0x40 : 0x00) | ((pid >> 8) & 0x1F));
-        packet[2] = pid & 0xFF;
-        packet[3] = (*continuityCounter & 0x0F);
-        (*continuityCounter) = ((*continuityCounter) + 1) & 0x0F;
+#pragma mark - TS packet writer
 
-        size_t payloadCapacity = 184;
-        size_t remaining = payloadLength - offset;
-        size_t toCopy = remaining < payloadCapacity ? remaining : payloadCapacity;
+static bool writeTSPackets(int fd,
+                           uint16_t pid,
+                           const uint8_t *payload,
+                           size_t len,
+                           bool start,
+                           bool addPCR,
+                           uint64_t pts90k,
+                           uint8_t *cc) {
+    size_t off = 0;
+    while (off < len) {
+        uint8_t pkt[188] = {0};
+        bool first = start && (off == 0);
+        bool pcrHere = addPCR && first;
 
-        if (includePCR || toCopy < payloadCapacity) {
-            packet[3] |= 0x30; // adaptation + payload
-            uint8_t *adapt = packet + 4;
-            size_t adaptIndex = 2;
-            adapt[1] = includePCR ? 0x10 : 0x00;
-            if (includePCR) {
-                uint64_t pcr = pcrBase * 300;
-                adapt[2] = (pcr >> 25) & 0xFF;
-                adapt[3] = (pcr >> 17) & 0xFF;
-                adapt[4] = (pcr >> 9) & 0xFF;
-                adapt[5] = (pcr >> 1) & 0xFF;
-                adapt[6] = ((pcr & 0x1) << 7) | 0x7E;
-                adapt[7] = 0x00;
-                adaptIndex = 8;
+        pkt[0] = 0x47;
+        pkt[1] = (first ? 0x40 : 0x00) | ((pid >> 8) & 0x1F);
+        pkt[2] = pid & 0xFF;
+        pkt[3] = (*cc & 0x0F);
+        (*cc) = ((*cc) + 1) & 0x0F;
+
+        size_t payloadMax = 184;
+        size_t remain = len - off;
+        size_t copy = remain < payloadMax ? remain : payloadMax;
+
+        if (pcrHere || copy < payloadMax) {
+            pkt[3] |= 0x30;
+            uint8_t *ad = pkt + 4;
+            size_t ai = 2;
+            ad[1] = pcrHere ? 0x10 : 0x00;
+
+            if (pcrHere) {
+                uint64_t base = pts90k & ((1ULL << 33) - 1);
+                ad[2] = (base >> 25) & 0xFF;
+                ad[3] = (base >> 17) & 0xFF;
+                ad[4] = (base >> 9) & 0xFF;
+                ad[5] = (base >> 1) & 0xFF;
+                ad[6] = (uint8_t)(((base & 1) << 7) | 0x7E);
+                ad[7] = 0x00;
+                ai = 8;
             }
 
-            size_t payloadRoom = payloadCapacity - (1 + adaptIndex);
-            if (toCopy > payloadRoom) {
-                toCopy = payloadRoom;
-            }
-            adaptationLength = (size_t)(adaptIndex - 1);
-            size_t stuffing = payloadCapacity - (adaptIndex + toCopy);
-            adaptationLength += stuffing;
-            adapt[0] = (uint8_t)adaptationLength;
-            memset(adapt + adaptIndex, 0xFF, stuffing);
-            memcpy(packet + 4 + 1 + adaptationLength, payload + offset, toCopy);
+            size_t adaptLen = ai - 1;
+            size_t stuff = payloadMax - (ai + copy);
+            adaptLen += stuff;
+            ad[0] = (uint8_t)adaptLen;
+            memset(ad + ai, 0xFF, stuff);
+            memcpy(pkt + 4 + 1 + adaptLen, payload + off, copy);
         } else {
-            packet[3] |= 0x10; // payload only
-            memcpy(packet + 4, payload + offset, toCopy);
+            pkt[3] |= 0x10;
+            memcpy(pkt + 4, payload + off, copy);
         }
 
-        sendAll(socketFd, packet, sizeof(packet));
-        offset += toCopy;
+        if (!sendAll(fd, pkt, 188)) return false;
+        off += copy;
     }
+    return true;
 }
 
-static CVPixelBufferRef createPixelBufferFromCGImage(CGImageRef image, size_t width, size_t height) {
-    NSDictionary *attributes = @{
-        (id)kCVPixelBufferCGImageCompatibilityKey : @YES,
-        (id)kCVPixelBufferCGBitmapContextCompatibilityKey : @YES
-    };
+#pragma mark - Encoder
 
-    CVPixelBufferRef pixelBuffer = NULL;
-    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, (__bridge CFDictionaryRef)attributes, &pixelBuffer);
-    if (status != kCVReturnSuccess || !pixelBuffer) {
-        return NULL;
-    }
+static void H264OutputCallback(void *ref,
+                              void *src,
+                              OSStatus st,
+                              VTEncodeInfoFlags flags,
+                              CMSampleBufferRef sb) {
+    (void)ref; (void)flags;
+    if (!src) return;
 
-    CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-    void *baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer);
-    size_t bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer);
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef context = CGBitmapContextCreate(baseAddress, width, height, 8, bytesPerRow, colorSpace, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
-    if (context) {
-        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
-        CGContextRelease(context);
-    }
-    CGColorSpaceRelease(colorSpace);
-    CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-    return pixelBuffer;
-}
-
-static ZXTH264EncoderContext *encodeFrame(VTCompressionSessionRef session, CGImageRef image, CMTime frameTime) {
-    ZXTH264EncoderContext *context = [[ZXTH264EncoderContext alloc] init];
-    context.encodedData = [NSMutableData data];
-    context.semaphore = dispatch_semaphore_create(0);
-    void *contextRef = (void *)CFBridgingRetain(context);
-
-    size_t width = kH264TargetWidth;
-    size_t height = kH264TargetHeight;
-    CVPixelBufferRef pixelBuffer = createPixelBufferFromCGImage(image, width, height);
-    if (!pixelBuffer) {
-        CFRelease((CFTypeRef)contextRef);
-        return nil;
-    }
-
-    VTEncodeInfoFlags flags = 0;
-    OSStatus status = VTCompressionSessionEncodeFrame(session, pixelBuffer, frameTime, kCMTimeInvalid, NULL, contextRef, &flags);
-    CVPixelBufferRelease(pixelBuffer);
-    if (status != noErr) {
-        CFRelease((CFTypeRef)contextRef);
-        return nil;
-    }
-
-    dispatch_semaphore_wait(context.semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)));
-    return context;
-}
-
-static VTCompressionSessionRef createEncoder(void) {
-    VTCompressionSessionRef session = NULL;
-    OSStatus status = VTCompressionSessionCreate(kCFAllocatorDefault,
-                                                 kH264TargetWidth,
-                                                 kH264TargetHeight,
-                                                 kCMVideoCodecType_H264,
-                                                 NULL,
-                                                 NULL,
-                                                 NULL,
-                                                 H264OutputCallback,
-                                                 NULL,
-                                                 &session);
-    if (status != noErr || !session) {
-        return NULL;
-    }
-
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Baseline_AutoLevel);
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (__bridge CFTypeRef)@(kH264TargetFPS * kH264KeyframeIntervalSeconds));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, (__bridge CFTypeRef)@(kH264KeyframeIntervalSeconds));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_ExpectedFrameRate, (__bridge CFTypeRef)@(kH264TargetFPS));
-    VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, (__bridge CFTypeRef)@(2000000));
-    VTCompressionSessionPrepareToEncodeFrames(session);
-    return session;
-}
-
-static void streamLoop(int clientSocket) {
-    VTCompressionSessionRef encoder = createEncoder();
-    if (!encoder) {
-        close(clientSocket);
+    ZXTH264EncoderContext *ctx = (ZXTH264EncoderContext *)CFBridgingRelease(src);
+    if (st != noErr || !sb || !CMSampleBufferDataIsReady(sb)) {
+        dispatch_semaphore_signal(ctx.semaphore);
         return;
     }
 
-    int64_t frameIndex = 0;
-    uint8_t patContinuity = 0;
-    uint8_t pmtContinuity = 0;
-    uint8_t videoContinuity = 0;
-    bool sentTables = false;
-    while (clientSocket >= 0) {
-        CGImageRef image = [Screen createScreenShotCGImageRef];
-        if (!image) {
-            break;
+    BOOL key = NO;
+    CFArrayRef atts = CMSampleBufferGetSampleAttachmentsArray(sb, false);
+    if (atts && CFArrayGetCount(atts)) {
+        // Sửa lỗi: ép kiểu CFDictionaryRef
+        CFDictionaryRef a = (CFDictionaryRef)CFArrayGetValueAtIndex(atts, 0);
+        key = !CFDictionaryContainsKey(a, kCMSampleAttachmentKey_NotSync);
+    }
+    ctx.isKeyframe = key;
+
+    CMFormatDescriptionRef fmt = CMSampleBufferGetFormatDescription(sb);
+    if (key && fmt) {
+        const uint8_t *sps,*pps; size_t spsSz,ppsSz;
+        if (CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt,0,&sps,&spsSz,NULL,NULL)==noErr &&
+            CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt,1,&pps,&ppsSz,NULL,NULL)==noErr) {
+            appendAnnexBHeader(ctx.encodedData);
+            [ctx.encodedData appendBytes:sps length:spsSz];
+            appendAnnexBHeader(ctx.encodedData);
+            [ctx.encodedData appendBytes:pps length:ppsSz];
         }
-
-        CMTime frameTime = CMTimeMake(frameIndex, kH264TargetFPS);
-        ZXTH264EncoderContext *context = encodeFrame(encoder, image, frameTime);
-        CGImageRelease(image);
-
-        if (!context || context.encodedData.length == 0) {
-            break;
-        }
-
-        if (!sentTables || context.isKeyframe) {
-            NSData *pat = buildPATPacket(patContinuity++);
-            NSData *pmt = buildPMTPacket(pmtContinuity++);
-            sendAll(clientSocket, (const uint8_t *)pat.bytes, pat.length);
-            sendAll(clientSocket, (const uint8_t *)pmt.bytes, pmt.length);
-            sentTables = true;
-        }
-
-        uint64_t pts = (uint64_t)((frameIndex * 90000) / kH264TargetFPS);
-        uint8_t pesHeader[19] = {0};
-        size_t pesIndex = 0;
-        pesHeader[pesIndex++] = 0x00;
-        pesHeader[pesIndex++] = 0x00;
-        pesHeader[pesIndex++] = 0x01;
-        pesHeader[pesIndex++] = 0xE0; // stream_id
-        pesHeader[pesIndex++] = 0x00;
-        pesHeader[pesIndex++] = 0x00; // PES length 0 for video
-        pesHeader[pesIndex++] = 0x80; // '10' + no scrambling
-        pesHeader[pesIndex++] = 0x80; // PTS only
-        pesHeader[pesIndex++] = 0x05; // header length
-        pesHeader[pesIndex++] = 0x21 | ((pts >> 29) & 0x0E);
-        pesHeader[pesIndex++] = (pts >> 22) & 0xFF;
-        pesHeader[pesIndex++] = 0x01 | ((pts >> 14) & 0xFE);
-        pesHeader[pesIndex++] = (pts >> 7) & 0xFF;
-        pesHeader[pesIndex++] = 0x01 | ((pts << 1) & 0xFE);
-
-        NSMutableData *pesPayload = [NSMutableData dataWithBytes:pesHeader length:pesIndex];
-        [pesPayload appendData:context.encodedData];
-        bool addPCR = (frameIndex % kPCRIntervalFrames) == 0;
-        writeTSPackets(clientSocket, kTSVideoPid, (const uint8_t *)pesPayload.bytes, pesPayload.length, true, addPCR, pts, &videoContinuity);
-
-        if (clientSocket < 0) {
-            break;
-        }
-        frameIndex++;
-        usleep((useconds_t)(1000000 / kH264TargetFPS));
     }
 
-    VTCompressionSessionInvalidate(encoder);
-    CFRelease(encoder);
-    shutdown(clientSocket, SHUT_RDWR);
-    close(clientSocket);
+    CMBlockBufferRef bb = CMSampleBufferGetDataBuffer(sb);
+    size_t len; char *ptr;
+    if (CMBlockBufferGetDataPointer(bb,0,NULL,&len,&ptr)==noErr) {
+        size_t off=0;
+        while (off+4<len) {
+            uint32_t n; memcpy(&n,ptr+off,4);
+            n=CFSwapInt32BigToHost(n);
+            appendAnnexBHeader(ctx.encodedData);
+            [ctx.encodedData appendBytes:ptr+off+4 length:n];
+            off+=4+n;
+        }
+    }
+    dispatch_semaphore_signal(ctx.semaphore);
 }
 
+static VTCompressionSessionRef createEncoder(void) {
+    VTCompressionSessionRef s=NULL;
+    if (VTCompressionSessionCreate(kCFAllocatorDefault,
+        kH264TargetWidth,kH264TargetHeight,
+        kCMVideoCodecType_H264,
+        NULL,NULL,NULL,
+        H264OutputCallback,NULL,&s)!=noErr) return NULL;
+
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_RealTime,kCFBooleanTrue);
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_ProfileLevel,kVTProfileLevel_H264_Baseline_AutoLevel);
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_AllowFrameReordering,kCFBooleanFalse);
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_MaxKeyFrameInterval,
+        (__bridge CFTypeRef)@(kH264TargetFPS*kH264KeyframeIntervalSeconds));
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
+        (__bridge CFTypeRef)@(kH264KeyframeIntervalSeconds));
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_ExpectedFrameRate,
+        (__bridge CFTypeRef)@(kH264TargetFPS));
+    VTSessionSetProperty(s,kVTCompressionPropertyKey_AverageBitRate,
+        (__bridge CFTypeRef)@(2000000));
+    VTCompressionSessionPrepareToEncodeFrames(s);
+    return s;
+}
+
+#pragma mark - Stream loop
+
+static void streamLoop(int fd) {
+    VTCompressionSessionRef enc = createEncoder();
+    if (!enc) { close(fd); return; }
+
+    uint8_t patCC=0,pmtCC=0,vidCC=0;
+    int64_t frame=0;
+
+    while (1) {
+        CGImageRef img=[Screen createScreenShotCGImageRef];
+        if (!img) break;
+
+        ZXTH264EncoderContext *ctx=[[ZXTH264EncoderContext alloc]init];
+        ctx.encodedData=[NSMutableData data];
+        ctx.semaphore=dispatch_semaphore_create(0);
+        // Sửa lỗi: ép kiểu void * cho CFBridgingRetain
+        void *ref=(void *)CFBridgingRetain(ctx);
+
+        CVPixelBufferRef pb=NULL;
+        CVPixelBufferCreate(kCFAllocatorDefault,
+            kH264TargetWidth,kH264TargetHeight,
+            kCVPixelFormatType_32BGRA,NULL,&pb);
+
+        CVPixelBufferLockBaseAddress(pb,0);
+        CGContextRef cg=CGBitmapContextCreate(
+            CVPixelBufferGetBaseAddress(pb),
+            kH264TargetWidth,kH264TargetHeight,8,
+            CVPixelBufferGetBytesPerRow(pb),
+            CGColorSpaceCreateDeviceRGB(),
+            kCGBitmapByteOrder32Little|kCGImageAlphaPremultipliedFirst);
+        CGContextDrawImage(cg,CGRectMake(0,0,kH264TargetWidth,kH264TargetHeight),img);
+        CGContextRelease(cg);
+        CVPixelBufferUnlockBaseAddress(pb,0);
+
+        VTCompressionSessionEncodeFrame(enc,pb,
+            CMTimeMake(frame,kH264TargetFPS),
+            kCMTimeInvalid,NULL,ref,NULL);
+        CVPixelBufferRelease(pb);
+        CGImageRelease(img);
+
+        dispatch_semaphore_wait(ctx.semaphore,DISPATCH_TIME_FOREVER);
+
+        NSData *pat=buildPAT(patCC++);
+        NSData *pmt=buildPMT(pmtCC++);
+        // Sửa lỗi: ép kiểu (const uint8_t *)
+        if (!sendAll(fd,(const uint8_t *)pat.bytes,188)) break;
+        if (!sendAll(fd,(const uint8_t *)pmt.bytes,188)) break;
+
+        uint64_t pts=(uint64_t)(frame*90000/kH264TargetFPS);
+        uint8_t pes[19]={
+            0,0,1,0xE0,0,0,0x80,0x80,5,
+            (uint8_t)(0x21|((pts>>29)&0x0E)),
+            (uint8_t)(pts>>22),
+            (uint8_t)(0x01|((pts>>14)&0xFE)),
+            (uint8_t)(pts>>7),
+            (uint8_t)(0x01|((pts<<1)&0xFE))
+        };
+
+        NSMutableData *payload=[NSMutableData dataWithBytes:pes length:14];
+        [payload appendData:ctx.encodedData];
+
+        // Sửa lỗi: ép kiểu (const uint8_t *) cho payload.bytes
+        if (!writeTSPackets(fd,kTSVideoPid,
+            (const uint8_t *)payload.bytes,payload.length,true,
+            (frame%kPCRIntervalFrames)==0,
+            pts,&vidCC)) break;
+
+        frame++;
+        usleep(1000000/kH264TargetFPS);
+    }
+
+    VTCompressionSessionInvalidate(enc);
+    CFRelease(enc);
+    shutdown(fd,SHUT_RDWR);
+    close(fd);
+
+    int exp=fd;
+    atomic_compare_exchange_strong(&gActiveClientFd,&exp,-1);
+}
+
+#pragma mark - Server
+
 void startH264StreamServer(void) {
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-        if (serverSocket < 0) {
-            return;
-        }
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0), ^{
+        int s=socket(AF_INET,SOCK_STREAM,0);
+        int yes=1;
+        setsockopt(s,SOL_SOCKET,SO_REUSEADDR,&yes,sizeof(yes));
 
-        int reuse = 1;
-        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-        int reusePort = 1;
-        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &reusePort, sizeof(reusePort));
-
-        struct sockaddr_in addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        addr.sin_port = htons(kH264StreamPort);
-
-        if (bind(serverSocket, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-            close(serverSocket);
-            return;
-        }
-
-        if (listen(serverSocket, 5) != 0) {
-            close(serverSocket);
-            return;
-        }
+        struct sockaddr_in a={0};
+        a.sin_family=AF_INET;
+        a.sin_addr.s_addr=htonl(INADDR_ANY);
+        a.sin_port=htons(kH264StreamPort);
+        bind(s,(struct sockaddr*)&a,sizeof(a));
+        listen(s,16);
 
         while (1) {
-            int clientSocket = accept(serverSocket, NULL, NULL);
-            if (clientSocket < 0) {
+            int c=accept(s,NULL,NULL);
+            if (c<0) continue;
+
+            int exp=-1;
+            if (!atomic_compare_exchange_strong(&gActiveClientFd,&exp,c)) {
+                close(c);
                 continue;
             }
-            int noSigPipe = 1;
-            setsockopt(clientSocket, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                streamLoop(clientSocket);
+
+            int nosig=1;
+            setsockopt(c,SOL_SOCKET,SO_NOSIGPIPE,&nosig,sizeof(nosig));
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0), ^{
+                streamLoop(c);
             });
         }
     });
