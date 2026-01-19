@@ -10,6 +10,8 @@
 OBJC_EXTERN void CARenderServerRenderDisplay(kern_return_t a, CFStringRef b, IOSurfaceRef surface, int x, int y);
 OBJC_EXTERN kern_return_t IOSurfaceLock(IOSurfaceRef buffer, IOSurfaceLockOptions options, uint32_t *seed);
 OBJC_EXTERN kern_return_t IOSurfaceUnLock(IOSurfaceRef buffer, IOSurfaceLockOptions options, uint32_t *seed);
+OBJC_EXTERN void *IOSurfaceGetBaseAddress(IOSurfaceRef buffer);
+OBJC_EXTERN size_t IOSurfaceGetBytesPerRow(IOSurfaceRef buffer);
 OBJC_EXTERN IOSurfaceRef IOSurfaceCreate(CFDictionaryRef dictionary);
 OBJC_EXTERN CGImageRef UICreateCGImageFromIOSurface(IOSurfaceRef surface);
 
@@ -204,6 +206,88 @@ OBJC_EXTERN UIImage *_UICreateScreenUIImage(void);
     screenSurface = nil;
 
     return cgImageRef;
+}
+
++ (cv::Mat)createScreenShotCvMat
+{
+    Boolean isiPad8orUp = false;
+
+    CGFloat scale = [UIScreen mainScreen].scale;
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
+
+    int height = (int)(screenSize.height * scale);
+    int width = (int)(screenSize.width * scale);
+
+    // check whether it is ipad8 or later
+    NSString *searchText = getDeviceName();
+
+    NSRange range = [searchText rangeOfString:@"^iPad[8-9]|iPad[1-9][0-9]+" options:NSRegularExpressionSearch];
+    if (range.location != NSNotFound) { // ipad pro (3rd) or later
+        isiPad8orUp = true;
+    }
+
+    if (isiPad8orUp)
+    {
+        if (width < height)
+        {
+            int temp = width;
+            width = height;
+            height = temp;
+        }
+    }
+    else
+    {
+        if (width > height)
+        {
+            int temp = width;
+            width = height;
+            height = temp;
+        }
+    }
+
+    int bytesPerElement = 4;
+    int bytesPerRow = roundUp(bytesPerElement * width, 32);
+
+    NSNumber *IOSurfaceBytesPerElement = [NSNumber numberWithInteger:bytesPerElement]; 
+    NSNumber *IOSurfaceBytesPerRow = [NSNumber numberWithInteger:bytesPerRow]; 
+    NSNumber *IOSurfaceAllocSize = [NSNumber numberWithInteger:bytesPerRow * height]; 
+    NSNumber *nheight = [NSNumber numberWithInteger:height]; 
+    NSNumber *nwidth = [NSNumber numberWithInteger:width]; 
+    NSNumber *IOSurfacePixelFormat = [NSNumber numberWithInteger:1111970369]; 
+    NSNumber *IOSurfaceIsGlobal = [NSNumber numberWithInteger:1]; 
+
+    NSDictionary *properties = [[NSDictionary alloc] initWithObjectsAndKeys:IOSurfaceAllocSize, @"IOSurfaceAllocSize"
+                                , IOSurfaceBytesPerElement, @"IOSurfaceBytesPerElement", IOSurfaceBytesPerRow, @"IOSurfaceBytesPerRow", nheight, @"IOSurfaceHeight", 
+                                IOSurfaceIsGlobal, @"IOSurfaceIsGlobal", IOSurfacePixelFormat, @"IOSurfacePixelFormat", nwidth, @"IOSurfaceWidth", nil];    
+
+    IOSurfaceRef screenSurface = IOSurfaceCreate((__bridge CFDictionaryRef)(properties));
+    
+    cv::Mat resultMat;
+    
+    if (screenSurface) {
+        IOSurfaceLock(screenSurface, 0, NULL);
+        CARenderServerRenderDisplay(0, CFSTR("LCD"), screenSurface, 0, 0);
+        
+        void *baseAddress = IOSurfaceGetBaseAddress(screenSurface);
+        size_t bytesPerRow = IOSurfaceGetBytesPerRow(screenSurface);
+        
+        // Create Mat wrapper around IOSurface data
+        // IOSurface data is usually BGRA (or whatever 1111970369 corresponds to - likely 'BGRA')
+        cv::Mat surfaceMat(height, width, CV_8UC4, baseAddress, bytesPerRow);
+        
+        if (isiPad8orUp) {
+            // Rotate 90 degrees counter-clockwise
+            cv::rotate(surfaceMat, resultMat, cv::ROTATE_90_COUNTERCLOCKWISE);
+        } else {
+            // Clone because we need to release IOSurface
+            resultMat = surfaceMat.clone();
+        }
+        
+        IOSurfaceUnlock(screenSurface, 0, NULL);
+        CFRelease(screenSurface);
+    }
+    
+    return resultMat;
 }
 
 
