@@ -392,23 +392,17 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     }
     else if (taskType == TASK_FRONTMOST_APP_ID)
     {
-        __block NSString *frontApp = nil;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            @autoreleasepool {
-                frontApp = frontMostAppId();
-            }
-        });
-        notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", frontApp] UTF8String], writeStreamRef);
+        @autoreleasepool {
+            NSString *frontApp = frontMostAppId();
+            notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", frontApp] UTF8String], writeStreamRef);
+        }
     }
     else if (taskType == TASK_FRONTMOST_APP_ORIENTATION)
     {
-        __block NSString *orientation = nil;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            @autoreleasepool {
-                orientation = frontMostAppOrientation();
-            }
-        });
-        notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", orientation] UTF8String], writeStreamRef);
+        @autoreleasepool {
+            NSString *orientation = frontMostAppOrientation();
+            notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", orientation] UTF8String], writeStreamRef);
+        }
     }
     else if (taskType == TASK_SET_AUTO_LAUNCH)
     {
