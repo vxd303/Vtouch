@@ -7,9 +7,10 @@
 #include "NSTask.h"
 #include "../pccontrol/IPCConfig.h"
 
-// Defines for Task Types (Copied from Task.h)
+// Defines for Task Types (Must match Task.h)
+#define TASK_PERFORM_TOUCH 10
+#define TASK_RUN_SHELL 13
 #define TASK_USLEEP 18
-#define TASK_RUN_SHELL 17
 
 // Forward declaration
 int notifyClient(UInt8* msg, CFWriteStreamRef client);
@@ -25,7 +26,7 @@ static int getTaskType(UInt8* dataArray)
 }
 
 // Function to forward data to SpringBoard Tweak
-static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient)
+static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient, BOOL waitForReply)
 {
     int sock = 0;
     struct sockaddr_un serv_addr;
@@ -52,6 +53,11 @@ static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient)
     // Send Request
     send(sock, buff, strlen((char*)buff), 0);
     send(sock, "\r\n", 2, 0);
+
+    if (!waitForReply) {
+        close(sock);
+        return;
+    }
 
     // Read Response Loop
     NSMutableData *responseData = [NSMutableData data];
@@ -121,8 +127,14 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
             notifyClient((UInt8*)"0\r\n", writeStreamRef);
         }
     }
+    else if (taskType == TASK_PERFORM_TOUCH)
+    {
+        // Touch tasks do not reply
+        forwardToSpringBoard(buff, writeStreamRef, NO);
+    }
     else
     {
-        forwardToSpringBoard(buff, writeStreamRef);
+        // Everything else expects a reply
+        forwardToSpringBoard(buff, writeStreamRef, YES);
     }
 }
