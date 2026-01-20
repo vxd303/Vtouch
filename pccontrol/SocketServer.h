@@ -8,9 +8,10 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-// Internal IPC Port for SpringBoard Tweak
-#define PORT 6001
-#define ADDR "127.0.0.1"
+// IPC is now handled via Unix Domain Socket defined in IPCConfig.h
+// These definitions are kept for reference or legacy support if needed
+// #define PORT 6001
+// #define ADDR "127.0.0.1"
 
 void socketServer();
 static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, void * clientCallBackInfo);
