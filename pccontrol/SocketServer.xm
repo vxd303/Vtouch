@@ -2,10 +2,7 @@
 
 
 #include "SocketServer.h"
-#include "IPCConfig.h"
 #include "Task.h"
-#include <sys/un.h>
-#include <sys/stat.h>
 
 
 CFSocketRef socketRef;
@@ -19,40 +16,41 @@ void report_memory(void);
 void socketServer()
 {
     @autoreleasepool {
-        unlink(IPC_SOCKET_PATH); // Remove existing file
-
-        CFSocketRef _socket = CFSocketCreate(kCFAllocatorDefault, PF_LOCAL, SOCK_STREAM, 0, kCFSocketAcceptCallBack, TCPServerAcceptCallBack, NULL);
+        CFSocketRef _socket = CFSocketCreate(kCFAllocatorDefault, PF_INET, SOCK_STREAM, IPPROTO_TCP, kCFSocketAcceptCallBack, TCPServerAcceptCallBack, NULL);
         
         if (_socket == NULL) {
             NSLog(@"### com.zjx.springboard: failed to create socket.");
             return;
         }
         
-        int nativeSocket = CFSocketGetNative(_socket);
-        struct sockaddr_un addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_LOCAL;
-        strcpy(addr.sun_path, IPC_SOCKET_PATH);
+        UInt32 reused = 1;
+
+        setsockopt(CFSocketGetNative(_socket), SOL_SOCKET, SO_REUSEADDR, (const void *)&reused, sizeof(reused));
         
-        // Use CFDataRef to wrap the address
-        CFDataRef address = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)&addr, sizeof(addr));
+        struct sockaddr_in Socketaddr;
+        memset(&Socketaddr, 0, sizeof(Socketaddr));
+        Socketaddr.sin_len = sizeof(Socketaddr);
+        Socketaddr.sin_family = AF_INET;
+
+        Socketaddr.sin_addr.s_addr = inet_addr(ADDR);
+
+        Socketaddr.sin_port = htons(PORT);
+
+        CFDataRef address = CFDataCreate(kCFAllocatorDefault,  (UInt8 *)&Socketaddr, sizeof(Socketaddr));
         
         if (CFSocketSetAddress(_socket, address) != kCFSocketSuccess) {
-            NSLog(@"### com.zjx.springboard: failed to bind socket.");
+
             if (_socket) {
                 CFRelease(_socket);
+                //exit(1);
             }
+
             _socket = NULL;
-        } else {
-            // Set permissions
-            chmod(IPC_SOCKET_PATH, 0777); // Allow zxtouchd to access
         }
         
-        CFRelease(address);
-
         socketClients = [[NSMutableDictionary alloc] init];
 
-        NSLog(@"### com.zjx.springboard: IPC connection waiting");
+        NSLog(@"### com.zjx.springboard: connection waiting on port %d", PORT);
         CFRunLoopRef cfrunLoop = CFRunLoopGetCurrent();
         CFRunLoopSourceRef source = CFSocketCreateRunLoopSource(kCFAllocatorDefault, _socket, 0);
 
@@ -81,7 +79,7 @@ static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, v
                     if (temp != nil)
                         processTask(buff, (CFWriteStreamRef)[temp longValue]);
                     else
-                        processTask(buff, NULL);
+                        processTask(buff);
                 }
             }
         }
@@ -119,7 +117,18 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
         
         CFSocketNativeHandle  nativeSocketHandle = *(CFSocketNativeHandle *)data;
         
-        // No need for getpeername on UDS
+        uint8_t name[SOCK_MAXADDRLEN];
+        socklen_t namelen = sizeof(name);
+
+        if (getpeername(nativeSocketHandle, (struct sockaddr *)name, &namelen) != 0) {
+
+            NSLog(@"### com.zjx.springboard: ++++++++getpeername+++++++");
+
+            exit(1);
+        }
+
+        struct sockaddr_in *addr_in = (struct sockaddr_in *)name;
+        NSLog(@"### com.zjx.springboard: connection starts", inet_ntoa(addr_in-> sin_addr), addr_in->sin_port);
         
         readStreamRef = NULL;
         writeStreamRef = NULL;
@@ -140,6 +149,9 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
             CFReadStreamScheduleWithRunLoop(readStreamRef, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
 
 			[socketClients setObject:@((long)writeStreamRef) forKey:@((long)readStreamRef)];
+            //const char *str = "+++welcome++++\n";
+
+            //CFWriteStreamWrite(writeStreamRef, (UInt8 *)str, strlen(str) + 1);
         }
         else
         {

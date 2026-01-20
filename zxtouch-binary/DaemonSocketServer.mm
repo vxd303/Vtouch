@@ -4,7 +4,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#define PORT 6000
+#define PORT 6002
 #define ADDR "0.0.0.0"
 
 // Forward declaration

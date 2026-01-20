@@ -8,10 +8,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-// IPC is now handled via Unix Domain Socket defined in IPCConfig.h
-// These definitions are kept for reference or legacy support if needed
-// #define PORT 6001
-// #define ADDR "127.0.0.1"
+#define PORT 6000
+#define ADDR "0.0.0.0"
 
 void socketServer();
 static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, void * clientCallBackInfo);
