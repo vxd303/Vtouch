@@ -1,17 +1,15 @@
 #import <Foundation/Foundation.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
 #include "NSTask.h"
+#include "../pccontrol/IPCConfig.h"
 
 // Defines for Task Types (Copied from Task.h)
 #define TASK_USLEEP 18
 #define TASK_RUN_SHELL 17
-
-// Internal IPC config
-#define SB_PORT 6001
-#define SB_IP "127.0.0.1"
 
 // Forward declaration
 int notifyClient(UInt8* msg, CFWriteStreamRef client);
@@ -30,28 +28,22 @@ static int getTaskType(UInt8* dataArray)
 static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient)
 {
     int sock = 0;
-    struct sockaddr_in serv_addr;
+    struct sockaddr_un serv_addr;
 
     // Create socket
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    if ((sock = socket(AF_LOCAL, SOCK_STREAM, 0)) < 0) {
         NSLog(@"com.zjx.zxtouchd: IPC Socket creation error");
         notifyClient((UInt8*)"-1;;IPC Error\r\n", originalClient);
         return;
     }
 
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(SB_PORT);
-
-    if(inet_pton(AF_INET, SB_IP, &serv_addr.sin_addr)<=0) {
-        NSLog(@"com.zjx.zxtouchd: Invalid IPC address");
-        notifyClient((UInt8*)"-1;;IPC Address Error\r\n", originalClient);
-        close(sock);
-        return;
-    }
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sun_family = AF_LOCAL;
+    strcpy(serv_addr.sun_path, IPC_SOCKET_PATH);
 
     // Connect
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        NSLog(@"com.zjx.zxtouchd: IPC Connection Failed. Is SpringBoard running?");
+        NSLog(@"com.zjx.zxtouchd: IPC Connection Failed. Is SpringBoard running? Path: %s", IPC_SOCKET_PATH);
         notifyClient((UInt8*)"-1;;IPC Connection Failed\r\n", originalClient);
         close(sock);
         return;
@@ -62,26 +54,21 @@ static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient)
     send(sock, "\r\n", 2, 0);
 
     // Read Response Loop
-    // Use dynamic data to handle arbitrary length responses
     NSMutableData *responseData = [NSMutableData data];
     char chunk[4096];
     long valread;
 
-    // Set a timeout for read (optional but good for robustness)
+    // Set a timeout for read
     struct timeval tv;
     tv.tv_sec = 5;  // 5 seconds timeout
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
     while ((valread = read(sock, chunk, sizeof(chunk) - 1)) > 0) {
-        // Ensure null termination for this chunk just in case we treat it as string later
         chunk[valread] = '\0';
         [responseData appendBytes:chunk length:valread];
 
-        // Basic check for terminator (assuming protocol ends with \r\n)
-        // This is a simple heuristic. For robust protocol, we need length headers.
         if (valread < (sizeof(chunk) - 1)) {
-            // Check if it ends with \n
             if (chunk[valread-1] == '\n') {
                 break;
             }
@@ -91,7 +78,6 @@ static void forwardToSpringBoard(UInt8 *buff, CFWriteStreamRef originalClient)
     close(sock);
 
     if ([responseData length] > 0) {
-        // Create a null-terminated string buffer
         NSMutableData *safeBuffer = [NSMutableData dataWithData:responseData];
         char nullByte = 0;
         [safeBuffer appendBytes:&nullByte length:1];
