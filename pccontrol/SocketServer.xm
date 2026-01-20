@@ -5,6 +5,7 @@
 #include "IPCConfig.h"
 #include "Task.h"
 #include <sys/un.h>
+#include <sys/stat.h>
 
 
 CFSocketRef socketRef;
