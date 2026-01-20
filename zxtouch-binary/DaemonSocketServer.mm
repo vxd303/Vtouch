@@ -71,8 +71,9 @@ static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, v
             if (hasRead > 0) {
                 readDataBuff[hasRead] = '\0'; // Ensure null termination
 
-                // strtok is destructive, so we operate on the buffer directly
-                for(char * charSep = strtok((char*)readDataBuff, "\r\n"); charSep != NULL; charSep = strtok(NULL, "\r\n")) {
+                char *saveptr;
+                // strtok_r is thread-safe
+                for(char * charSep = strtok_r((char*)readDataBuff, "\r\n", &saveptr); charSep != NULL; charSep = strtok_r(NULL, "\r\n", &saveptr)) {
                     UInt8 *buff = (UInt8*)charSep;
                     id temp = [socketClients objectForKey:@((long)readStream)];
                     if (temp != nil)

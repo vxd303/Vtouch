@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include "NSTask.h"
 
 // Defines for Task Types (Copied from Task.h)
 #define TASK_USLEEP 18
@@ -122,8 +123,14 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
         NSString *cmd = [NSString stringWithUTF8String:(char*)eventData];
         NSLog(@"com.zjx.zxtouchd: Executing shell: %@", cmd);
 
-        // Use system() for now. Ideally use NSTask for output capture.
-        system([cmd UTF8String]);
+        @autoreleasepool {
+            NSTask *task = [[NSTask alloc] init];
+            [task setLaunchPath:@"/bin/sh"];
+            [task setArguments:@[@"-c", cmd]];
+            [task launch];
+            [task waitUntilExit];
+        }
+
         if (writeStreamRef) {
             notifyClient((UInt8*)"0\r\n", writeStreamRef);
         }
