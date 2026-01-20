@@ -366,6 +366,8 @@ Boolean init()
         //system("sudo zxtouchb -e \"chown -R mobile:mobile /var/mobile/Library/ZXTouch\"");
 
         startH264StreamServer();
+
+        NSLog(@"com.zjx.springboard: Starting IPC Socket Server...");
         socketServer();
     });
 }

@@ -38,7 +38,7 @@ id getFrontMostApplication()
 {
     //TODO: might cause problem here. Both _accessibilityFrontMostApplication failed or front most application springboard will cause app be nil.
     __block id app = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    void (^block)(void) = ^{
         @try{
             SpringBoard *springboard = (SpringBoard*)[%c(SpringBoard) sharedApplication];
             app = [springboard _accessibilityFrontMostApplication];
@@ -47,7 +47,13 @@ id getFrontMostApplication()
         @catch (NSException *exception) {
             NSLog(@"com.zjx.springboard: Debug: %@", exception.reason);
         }
-        });
+    };
+
+    if ([NSThread isMainThread]) {
+        block();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), block);
+    }
     return app;
 }
 

@@ -47,7 +47,7 @@ Get the size of the screen and set them.
 {
     __block int screenOrientation = -1;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    void (^block)(void) = ^{
         @try{
             SpringBoard *springboard = (SpringBoard*)[%c(SpringBoard) sharedApplication];
             screenOrientation = [springboard _frontMostAppOrientation];
@@ -56,8 +56,13 @@ Get the size of the screen and set them.
         @catch (NSException *exception) {
             NSLog(@"com.zjx.springboard: Debug: %@", exception.reason);
         }
-    }   
-    );
+    };
+
+    if ([NSThread isMainThread]) {
+        block();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), block);
+    }
 
     return screenOrientation;
 }
